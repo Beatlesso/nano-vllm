@@ -16,8 +16,8 @@ class Qwen3Attention(nn.Module):
     def __init__(
         self,
         hidden_size: int,
-        num_heads: int,
-        num_kv_heads: int,
+        num_heads: int, # Q
+        num_kv_heads: int, # KV
         max_position: int = 4096 * 32,
         head_dim: int | None = None,
         rms_norm_eps: float = 1e-06,
@@ -28,6 +28,7 @@ class Qwen3Attention(nn.Module):
         super().__init__()
         tp_size = dist.get_world_size()
         self.total_num_heads = num_heads
+        # 从 heads 维度进行 TP
         assert self.total_num_heads % tp_size == 0
         self.num_heads = self.total_num_heads // tp_size
         self.total_num_kv_heads = num_kv_heads
