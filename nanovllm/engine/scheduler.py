@@ -8,10 +8,10 @@ from nanovllm.engine.block_manager import BlockManager
 class Scheduler:
 
     def __init__(self, config: Config):
-        self.max_num_seqs = config.max_num_seqs
-        self.max_num_batched_tokens = config.max_num_batched_tokens
+        self.max_num_seqs = config.max_num_seqs # 单次调度的最大序列数
+        self.max_num_batched_tokens = config.max_num_batched_tokens # prefill 允许的最大 token 数
         self.eos = config.eos
-        self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
+        self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size) # KV Cache 的 block 分配器
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
 
@@ -21,6 +21,7 @@ class Scheduler:
     def add(self, seq: Sequence):
         self.waiting.append(seq)
 
+    # return scheduled_seqs, is_prefill
     def schedule(self) -> tuple[list[Sequence], bool]:
         # prefill
         scheduled_seqs = []
@@ -45,23 +46,25 @@ class Scheduler:
             seq = self.running.popleft()
             while not self.block_manager.can_append(seq):
                 if self.running:
-                    self.preempt(self.running.pop())
+                    self.preempt(self.running.pop()) # 抢占其它 prefill 好的请求，释放其 KV Cache
                 else:
-                    self.preempt(seq)
+                    self.preempt(seq) # 已经没有其他资源科释放，仍无法满足，释放自己
                     break
-            else:
+            else: # 当 while 正常结束，没有遇到 break 的时候执行
                 num_seqs += 1
                 self.block_manager.may_append(seq)
                 scheduled_seqs.append(seq)
         assert scheduled_seqs
-        self.running.extendleft(reversed(scheduled_seqs))
+        self.running.extendleft(reversed(scheduled_seqs)) # 将 scheduled_seqs 按照原顺序放回 running
         return scheduled_seqs, False
 
+    # 释放 seq 的资源，重新放回 waiting
     def preempt(self, seq: Sequence):
         seq.status = SequenceStatus.WAITING
         self.block_manager.deallocate(seq)
         self.waiting.appendleft(seq)
 
+    # 根据 generate 的 token 判断 seq 是否应该结束
     def postprocess(self, seqs: list[Sequence], token_ids: list[int]) -> list[bool]:
         for seq, token_id in zip(seqs, token_ids):
             seq.append_token(token_id)
